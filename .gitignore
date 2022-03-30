@@ -1,2 +1,6 @@
 **/.idea/*
 **/build/*
+.idea
+build
+.idea/
+build/
