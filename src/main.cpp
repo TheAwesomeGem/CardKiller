@@ -48,7 +48,8 @@ void transform_if(InputIt first, InputIt last, OutputIt dest, Pred pred, Fct tra
 enum class StateType
 {
     Health,
-    Energy
+    Energy,
+    Bleeding
 };
 
 enum class EffectOperator
@@ -59,41 +60,28 @@ enum class EffectOperator
     Exponential
 };
 
-enum class EffectType
-{
-    Heal,
-    Damage,
-    EnergyUse
-};
-
-enum class RequirementType
-{
-    Energy,
-    Health,
-    Range
-};
-
 struct Action
 {
-    Action(EffectType effect_, EffectOperator op_, float value_)
-            : effect{effect_}, op{op_}, value{value_}
+    Action(StateType stateType_, EffectOperator op_, float value_)
+            : stateType{stateType_}, op{op_}, value{value_}
     {
 
     }
 
-    EffectType effect;
+    StateType stateType;
     EffectOperator op;
     float value;
 };
 
-struct RequirementData
+struct Requirement
 {
-    RequirementData(float min_, float max_)
-            : min{min_}, max{max_}
+    Requirement(StateType _stateType, float min_, float max_)
+            : stateType{_stateType}, min{min_}, max{max_}
     {
 
     }
 
+    StateType stateType;
     float min;
     float max;
 };
@@ -107,8 +95,8 @@ struct Move
     }
 
     std::vector<Action> actions;
-    std::unordered_map<RequirementType, RequirementData> requirements;
-    int16_t maxUses;
+    std::vector<Requirement> requirements;
+    int16_t maxUses; // TODO: Maybe this can be part of the requirements?
 };
 
 struct State
@@ -130,7 +118,7 @@ struct Card
     std::unordered_map<StateType, State> states;
 };
 
-void ApplyAction(const Action& action, Card& target);
+void ApplyEffect(EffectOperator op, float modifier, State& value);
 
 void ApplyMove(Card& source, size_t moveIndex, Card& target)
 {
@@ -144,39 +132,24 @@ void ApplyMove(Card& source, size_t moveIndex, Card& target)
         return;
     }
 
+    for (const Requirement& requirement: move.requirements)
+    {
+        float current = target.states.at(requirement.stateType).current;
+
+        if (current < requirement.min || current > requirement.max)
+        {
+            printf("You do not meet the requirement to be able to do this move.\n");
+
+            return;
+        }
+    }
+
     for (const Action& action: move.actions)
     {
-        ApplyAction(action, target);
+        ApplyEffect(action.op, action.value, target.states.at(action.stateType));
     }
 
     --move.maxUses;
-}
-
-void ApplyEffect(EffectOperator op, float modifier, State& value);
-
-void ApplyAction(const Action& action, Card& target)
-{
-    switch (action.effect)
-    {
-        case EffectType::Heal:
-        {
-            ApplyEffect(action.op, action.value, target.states.at(StateType::Health));
-
-            break;
-        }
-        case EffectType::Damage:
-        {
-            ApplyEffect(action.op, -action.value, target.states.at(StateType::Health));
-
-            break;
-        }
-        case EffectType::EnergyUse:
-        {
-            ApplyEffect(action.op, -action.value, target.states.at(StateType::Energy));
-
-            break;
-        }
-    }
 }
 
 void ApplyEffect(EffectOperator op, float modifier, State& state)
@@ -231,16 +204,16 @@ struct CardBuilder
         return *this;
     }
 
-    CardBuilder& AddRequirement(size_t moveIndex, RequirementType requirementType, float min, float max)
+    CardBuilder& AddRequirement(size_t moveIndex, StateType stateType, float min, float max)
     {
-        card.moves[moveIndex].requirements.emplace(requirementType, RequirementData{min, max});
+        card.moves[moveIndex].requirements.emplace_back(Requirement{stateType, min, max});
 
         return *this;
     }
 
-    CardBuilder& AddActions(size_t moveIndex, EffectType effectType, EffectOperator op, float value)
+    CardBuilder& AddActions(size_t moveIndex, StateType stateType, EffectOperator op, float value)
     {
-        card.moves[moveIndex].actions.emplace_back(effectType, op, value);
+        card.moves[moveIndex].actions.emplace_back(stateType, op, value);
 
         return *this;
     }
@@ -258,18 +231,20 @@ private:
 
 int main()
 {
+    // TODO: Support bleeding
+
     {
         Card card = CardBuilder{}
                 .AddState(StateType::Health, 0.0F, 100.0F, 20.0F)
                 .AddState(StateType::Energy, 0.0F, 100.0F, 40.0F)
                 .AddMove(2)
                 .AddMove(INTEGER_16_MAX)
-                .AddRequirement(0, RequirementType::Energy, 10.0F, FLOAT_MAX)
-                .AddRequirement(1, RequirementType::Energy, 20.0F, FLOAT_MAX)
-                .AddActions(0, EffectType::Heal, EffectOperator::Additive, 20.0F)
-                .AddActions(0, EffectType::EnergyUse, EffectOperator::Additive, 10.0F)
-                .AddActions(1, EffectType::Damage, EffectOperator::Additive, 30.0F)
-                .AddActions(1, EffectType::EnergyUse, EffectOperator::Additive, 20.0F)
+                .AddRequirement(0, StateType::Energy, 11.0F, FLOAT_MAX)
+                .AddRequirement(1, StateType::Energy, 20.0F, FLOAT_MAX)
+                .AddActions(0, StateType::Health, EffectOperator::Additive, +20.0F)
+                .AddActions(0, StateType::Energy, EffectOperator::Additive, -10.0F)
+                .AddActions(1, StateType::Health, EffectOperator::Additive, -30.0F)
+                .AddActions(1, StateType::Energy, EffectOperator::Additive, -20.0F)
                 .Use();
 
         ApplyMove(card, 0, card);
@@ -277,6 +252,10 @@ int main()
         printf("Energy is now %f.\n", card.states.at(StateType::Energy).current);
 
         ApplyMove(card, 1, card);
+        printf("Health is now %f.\n", card.states.at(StateType::Health).current);
+        printf("Energy is now %f.\n", card.states.at(StateType::Energy).current);
+
+        ApplyMove(card, 0, card);
         printf("Health is now %f.\n", card.states.at(StateType::Health).current);
         printf("Energy is now %f.\n", card.states.at(StateType::Energy).current);
     }
