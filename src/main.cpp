@@ -10,6 +10,11 @@
 #include <valarray>
 
 
+static constexpr const float FLOAT_MAX = std::numeric_limits<float>::max();
+static constexpr const float FLOAT_MIN = std::numeric_limits<float>::min();
+static constexpr const int16_t INTEGER_16_MAX = std::numeric_limits<int16_t>::max();
+static constexpr const int16_t INTEGER_16_MIN = std::numeric_limits<int16_t>::min();
+
 template<typename T>
 T clamp(T value, T min, T max)
 {
@@ -42,7 +47,8 @@ void transform_if(InputIt first, InputIt last, OutputIt dest, Pred pred, Fct tra
 
 enum class StateType
 {
-    Health
+    Health,
+    Energy
 };
 
 enum class EffectOperator
@@ -56,21 +62,53 @@ enum class EffectOperator
 enum class EffectType
 {
     Heal,
-    Damage
+    Damage,
+    EnergyUse
+};
+
+enum class RequirementType
+{
+    Energy,
+    Health,
+    Range
 };
 
 struct Action
 {
+    Action(EffectType effect_, EffectOperator op_, float value_)
+            : effect{effect_}, op{op_}, value{value_}
+    {
+
+    }
+
     EffectType effect;
     EffectOperator op;
     float value;
 };
 
+struct RequirementData
+{
+    RequirementData(float min_, float max_)
+            : min{min_}, max{max_}
+    {
+
+    }
+
+    float min;
+    float max;
+};
+
 struct Move
 {
-    // TODO: Add requirements/conditions to apply certain action
-    // TODO: Add limits to certain actions. Like a max and a min (EffectOperator+Value)
+    explicit Move(int16_t maxUses_)
+            : maxUses{maxUses_}
+    {
+
+    }
+
     std::vector<Action> actions;
+    std::unordered_map<RequirementType, RequirementData> requirements;
+    int16_t maxUses;
 };
 
 struct State
@@ -88,22 +126,30 @@ struct State
 
 struct Card
 {
-    std::vector<Move> moves; // TODO: Add requirements/constraints to performing certain moves
+    std::vector<Move> moves;
     std::unordered_map<StateType, State> states;
 };
 
 void ApplyAction(const Action& action, Card& target);
 
-void ApplyMove(const Card& source, int moveIndex, Card& target)
+void ApplyMove(Card& source, size_t moveIndex, Card& target)
 {
     // TODO: Add a way to restrict certain moves to certain targets
+    Move& move = source.moves[moveIndex];
 
-    const Move& move = source.moves[moveIndex];
+    if (move.maxUses < 1)
+    {
+        printf("You cannot use this move anymore.\n");
+
+        return;
+    }
 
     for (const Action& action: move.actions)
     {
         ApplyAction(action, target);
     }
+
+    --move.maxUses;
 }
 
 void ApplyEffect(EffectOperator op, float modifier, State& value);
@@ -121,6 +167,12 @@ void ApplyAction(const Action& action, Card& target)
         case EffectType::Damage:
         {
             ApplyEffect(action.op, -action.value, target.states.at(StateType::Health));
+
+            break;
+        }
+        case EffectType::EnergyUse:
+        {
+            ApplyEffect(action.op, -action.value, target.states.at(StateType::Energy));
 
             break;
         }
@@ -159,30 +211,74 @@ void ApplyEffect(EffectOperator op, float modifier, State& state)
     }
 }
 
+struct CardBuilder
+{
+    CardBuilder()
+            : card{}
+    {
+
+    }
+
+    Card Use()
+    {
+        return std::move(card);
+    }
+
+    CardBuilder& AddState(StateType stateType, float min, float max, float current)
+    {
+        card.states.emplace(stateType, State{min, max, current});
+
+        return *this;
+    }
+
+    CardBuilder& AddRequirement(size_t moveIndex, RequirementType requirementType, float min, float max)
+    {
+        card.moves[moveIndex].requirements.emplace(requirementType, RequirementData{min, max});
+
+        return *this;
+    }
+
+    CardBuilder& AddActions(size_t moveIndex, EffectType effectType, EffectOperator op, float value)
+    {
+        card.moves[moveIndex].actions.emplace_back(effectType, op, value);
+
+        return *this;
+    }
+
+    CardBuilder& AddMove(int maxUses)
+    {
+        Move& move = card.moves.emplace_back(maxUses);
+
+        return *this;
+    }
+
+private:
+    Card card;
+};
+
 int main()
 {
     {
-        Card card;
-        card.states.emplace(StateType::Health, State{0.0F, 100.0F, 20.F});
-
-        Move& healMove = card.moves.emplace_back();
-        Action& healAction = healMove.actions.emplace_back();
-        healAction.value = 20.F;
-        healAction.op = EffectOperator::Additive;
-        healAction.effect = EffectType::Heal;
-
-        Move& damageMove = card.moves.emplace_back();
-        Action& damageAction = damageMove.actions.emplace_back();
-        damageAction.value = 20.F;
-        damageAction.op = EffectOperator::Additive;
-        damageAction.effect = EffectType::Damage;
+        Card card = CardBuilder{}
+                .AddState(StateType::Health, 0.0F, 100.0F, 20.0F)
+                .AddState(StateType::Energy, 0.0F, 100.0F, 40.0F)
+                .AddMove(2)
+                .AddMove(INTEGER_16_MAX)
+                .AddRequirement(0, RequirementType::Energy, 10.0F, FLOAT_MAX)
+                .AddRequirement(1, RequirementType::Energy, 20.0F, FLOAT_MAX)
+                .AddActions(0, EffectType::Heal, EffectOperator::Additive, 20.0F)
+                .AddActions(0, EffectType::EnergyUse, EffectOperator::Additive, 10.0F)
+                .AddActions(1, EffectType::Damage, EffectOperator::Additive, 30.0F)
+                .AddActions(1, EffectType::EnergyUse, EffectOperator::Additive, 20.0F)
+                .Use();
 
         ApplyMove(card, 0, card);
         printf("Health is now %f.\n", card.states.at(StateType::Health).current);
+        printf("Energy is now %f.\n", card.states.at(StateType::Energy).current);
 
         ApplyMove(card, 1, card);
-        ApplyMove(card, 1, card);
         printf("Health is now %f.\n", card.states.at(StateType::Health).current);
+        printf("Energy is now %f.\n", card.states.at(StateType::Energy).current);
     }
 
     std::cin.get();
