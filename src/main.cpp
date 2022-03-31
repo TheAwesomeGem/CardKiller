@@ -5,10 +5,9 @@
 //
 
 #include <iostream>
-#include <memory>
-#include <set>
 #include <vector>
 #include <unordered_map>
+#include <valarray>
 
 
 template<typename T>
@@ -43,118 +42,147 @@ void transform_if(InputIt first, InputIt last, OutputIt dest, Pred pred, Fct tra
 
 enum class StateType
 {
-    MaxHealth,
     Health
 };
 
-struct StateContainer
+enum class EffectOperator
 {
-    std::unordered_map<StateType, std::pair<std::string, float>> states;
+    Specified,
+    Additive,
+    Multiplicative,
+    Exponential
+};
+
+enum class EffectType
+{
+    Heal,
+    Damage
 };
 
 struct Action
 {
-    virtual ~Action() = default;
+    EffectType effect;
+    EffectOperator op;
+    float value;
+};
 
-    virtual bool CanApplyTo(const StateContainer& target) const = 0;
+struct Move
+{
+    // TODO: Add requirements/conditions to apply certain action
+    // TODO: Add limits to certain actions. Like a max and a min (EffectOperator+Value)
+    std::vector<Action> actions;
+};
 
-    virtual void Apply(StateContainer& target) = 0;
+struct State
+{
+    State(float min_, float max_, float current_)
+            : min{min_}, max{max_}, current{current_}
+    {
+
+    }
+
+    float min;
+    float max;
+    float current;
 };
 
 struct Card
 {
-    void AddAction(std::unique_ptr<Action> action)
-    {
-        actions.push_back(std::move(action));
-    }
-
-    std::vector<std::unique_ptr<Action>> actions;
-    StateContainer stateContainer;
+    std::vector<Move> moves; // TODO: Add requirements/constraints to performing certain moves
+    std::unordered_map<StateType, State> states;
 };
 
-struct DamageAction : Action
+void ApplyAction(const Action& action, Card& target);
+
+void ApplyMove(const Card& source, int moveIndex, Card& target)
 {
-    explicit DamageAction(float damage_)
-            : damage{damage_}
+    // TODO: Add a way to restrict certain moves to certain targets
+
+    const Move& move = source.moves[moveIndex];
+
+    for (const Action& action: move.actions)
     {
-        printf("Initialized DamageAction.\n");
+        ApplyAction(action, target);
     }
-
-    ~DamageAction() override
-    {
-        printf("DeInitialized DamageAction.\n");
-    }
-
-    bool CanApplyTo(const StateContainer& other) const override
-    {
-        return true;
-    }
-
-    void Apply(StateContainer& target) override
-    {
-        printf("Executing DamageAction.\n");
-    }
-
-    float damage;
-};
-
-struct HealAction : Action
-{
-    explicit HealAction(float heal_)
-            : heal{heal_}
-    {
-        printf("Initialized HealAction.\n");
-    }
-
-    ~HealAction() override
-    {
-        printf("DeInitialized HealAction.\n");
-    }
-
-    bool CanApplyTo(const StateContainer& other) const override
-    {
-        return true;
-    }
-
-    void Apply(StateContainer& target) override
-    {
-        float newHealth = target.states[StateType::Health].second + heal;
-
-        target.states[StateType::Health].second = clamp(newHealth, 0.0F, target.states[StateType::MaxHealth].second);
-
-        printf("Executing HealAction to %d targets.\n");
-    }
-
-    float heal;
-};
-
-static std::unique_ptr<Action> CreateDamageAction()
-{
-    return std::make_unique<DamageAction>(20);
 }
 
-static std::unique_ptr<Action> CreateHealAction()
+void ApplyEffect(EffectOperator op, float modifier, State& value);
+
+void ApplyAction(const Action& action, Card& target)
 {
-    return std::make_unique<HealAction>(30);
+    switch (action.effect)
+    {
+        case EffectType::Heal:
+        {
+            ApplyEffect(action.op, action.value, target.states.at(StateType::Health));
+
+            break;
+        }
+        case EffectType::Damage:
+        {
+            ApplyEffect(action.op, -action.value, target.states.at(StateType::Health));
+
+            break;
+        }
+    }
 }
 
-void ApplyAction(Card& source, int actionIndex, Card& target)
+void ApplyEffect(EffectOperator op, float modifier, State& state)
 {
-    auto& action = source.actions[actionIndex];
-    action->Apply(target.stateContainer);
+    switch (op)
+    {
+        case EffectOperator::Specified:
+        {
+            state.current = clamp(modifier, state.min, state.max);
+
+            break;
+        }
+
+        case EffectOperator::Additive:
+        {
+            state.current = clamp(state.current + modifier, state.min, state.max);
+
+            break;
+        }
+        case EffectOperator::Multiplicative:
+        {
+            state.current = clamp(state.current * modifier, state.min, state.max);
+
+            break;
+        }
+        case EffectOperator::Exponential:
+        {
+            state.current = clamp(std::pow(state.current, modifier), state.min, state.max);
+
+            break;
+        }
+    }
 }
 
 int main()
 {
     {
         Card card;
-        card.stateContainer.states[StateType::MaxHealth] = std::make_pair("Max Health", 100.0F);
-        card.stateContainer.states[StateType::Health] = std::make_pair("Health", 20.0F);
-        card.AddAction(CreateHealAction());
-        card.AddAction(CreateDamageAction());
+        card.states.emplace(StateType::Health, State{0.0F, 100.0F, 20.F});
 
-        ApplyAction(card, 0, card);
-        printf("Health is now %f.\n", card.stateContainer.states[StateType::Health].second);
+        Move& healMove = card.moves.emplace_back();
+        Action& healAction = healMove.actions.emplace_back();
+        healAction.value = 20.F;
+        healAction.op = EffectOperator::Additive;
+        healAction.effect = EffectType::Heal;
+
+        Move& damageMove = card.moves.emplace_back();
+        Action& damageAction = damageMove.actions.emplace_back();
+        damageAction.value = 20.F;
+        damageAction.op = EffectOperator::Additive;
+        damageAction.effect = EffectType::Damage;
+
+        ApplyMove(card, 0, card);
+        printf("Health is now %f.\n", card.states.at(StateType::Health).current);
+
+        ApplyMove(card, 1, card);
+        ApplyMove(card, 1, card);
+        printf("Health is now %f.\n", card.states.at(StateType::Health).current);
     }
 
     std::cin.get();
